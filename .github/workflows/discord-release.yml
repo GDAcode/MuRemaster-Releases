@@ -1,0 +1,65 @@
+# Copy to GDAcode/MuRemaster-Releases as .github/workflows/discord-release.yml
+# When a release is published there: posts its notes in #changelog and updates the #download message.
+# Needs (Settings > Secrets and variables > Actions), printed by Tools/Discord/setup_discord.py:
+#   secret   DISCORD_CHANGELOG_WEBHOOK
+#   secret   DISCORD_DOWNLOAD_WEBHOOK
+#   variable DISCORD_DOWNLOAD_MESSAGE
+name: Discord release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to Discord
+        env:
+          RELEASE: ${{ toJSON(github.event.release) }}
+          CHANGELOG_WEBHOOK: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}
+          DOWNLOAD_WEBHOOK: ${{ secrets.DISCORD_DOWNLOAD_WEBHOOK }}
+          DOWNLOAD_MESSAGE: ${{ vars.DISCORD_DOWNLOAD_MESSAGE }}
+        shell: python
+        run: |
+          import json, os, urllib.request
+
+          release = json.loads(os.environ["RELEASE"])
+          version = release["tag_name"]
+          page = release["html_url"]
+          setup = "https://github.com/GDAcode/MuRemaster-Releases/releases/latest/download/MuRemaster-Setup.exe"
+          notes = (release.get("body") or "").strip()
+          if not notes or notes == f"MuRemaster {version}":
+              notes = "Fixes and improvements."
+          if len(notes) > 3900:  # embed description limit is 4096
+              notes = notes[:3900].rsplit("\n", 1)[0] + f"\n\n… [full notes]({page})"
+
+          def send(method, url, body):
+              request = urllib.request.Request(
+                  url, data=json.dumps(body).encode(), method=method,
+                  headers={"Content-Type": "application/json", "User-Agent": "DiscordBot (https://discord.com, 1.0)"})
+              with urllib.request.urlopen(request) as response:
+                  print(method, response.status)
+
+          send("POST", os.environ["CHANGELOG_WEBHOOK"], {"embeds": [{
+              "title": f"📝 MuRemaster {version}",
+              "url": page,
+              "description": notes + f"\n\n**[⬇️ Download]({setup})**",
+              "color": 0xE0A526,
+              "timestamp": release["published_at"],
+          }]})
+
+          message = os.environ.get("DOWNLOAD_MESSAGE", "").strip()
+          if message:
+              send("PATCH", f"{os.environ['DOWNLOAD_WEBHOOK']}/messages/{message}", {"embeds": [{
+                  "title": f"⬇️ MuRemaster {version} — Download",
+                  "url": setup,
+                  "description": (
+                      f"**[Download the installer (MuRemaster-Setup.exe)]({setup})**\n\n"
+                      "• Windows 64-bit\n"
+                      "• The game updates itself when a new version is out.\n"
+                      f"• Release notes: [{version}]({page}) · see also the changelog channel\n"
+                      "• All versions: https://github.com/GDAcode/MuRemaster-Releases/releases"
+                  ),
+                  "color": 0xE0A526,
+              }]})
